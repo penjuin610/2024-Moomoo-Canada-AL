@@ -5,6 +5,7 @@ import csv
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,6 +38,8 @@ IMAGE_SUFFIXES = {
     ".heic",
     ".heif",
 }
+VISION_HELPER_SOURCE = Path(__file__).with_name("vision_ocr_test.m")
+VISION_HELPER_BINARY = Path(__file__).with_name("vision_ocr_helper")
 
 
 def preprocess_image(image: Image.Image) -> Image.Image:
@@ -78,6 +81,52 @@ def prepare_source_image(image_path: Path) -> tuple[Path, bool]:
     return image_path, False
 
 
+def ensure_vision_helper() -> Path:
+    if not VISION_HELPER_SOURCE.exists():
+        raise RuntimeError("vision_helper_source_missing")
+
+    source_mtime = VISION_HELPER_SOURCE.stat().st_mtime
+    binary_exists = VISION_HELPER_BINARY.exists()
+    binary_mtime = VISION_HELPER_BINARY.stat().st_mtime if binary_exists else 0
+    if binary_exists and binary_mtime >= source_mtime:
+        return VISION_HELPER_BINARY
+
+    clang_path = shutil.which("clang")
+    if not clang_path:
+        raise RuntimeError("clang_not_found")
+
+    command = [
+        clang_path,
+        "-fobjc-arc",
+        "-framework",
+        "Foundation",
+        "-framework",
+        "AppKit",
+        "-framework",
+        "Vision",
+        str(VISION_HELPER_SOURCE),
+        "-o",
+        str(VISION_HELPER_BINARY),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "vision_helper_compile_failed")
+    return VISION_HELPER_BINARY
+
+
+def run_vision_ocr(image_path: Path) -> str:
+    helper_binary = ensure_vision_helper()
+    result = subprocess.run(
+        [str(helper_binary), str(image_path)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "vision_ocr_failed")
+    payload = json.loads(result.stdout)
+    return payload.get("text", "")
+
+
 def build_image_groups(image_path: Path) -> dict[str, Image.Image]:
     source = ImageOps.exif_transpose(Image.open(image_path))
     width, height = source.size
@@ -100,48 +149,29 @@ def build_image_groups(image_path: Path) -> dict[str, Image.Image]:
     return {"full": source, "center": center_crop, "tight": tight_crop}
 
 
-def build_variants(image_path: Path, mode: str) -> list[tuple[Path, int, bool]]:
+def build_variants(image_path: Path, mode: str) -> list[Path]:
     groups = build_image_groups(image_path)
 
     if mode == "fast":
         plan = [
-            ("tight", 90, 6, True),
-            ("tight", 0, 6, True),
-            ("center", 90, 6, True),
-            ("full", 90, 6, False),
-            ("tight", 90, 11, True),
+            ("tight", 90),
+            ("center", 90),
         ]
     else:
-        plan = []
-        for group_name in ("full", "center", "tight"):
-            for angle in (0, 90, 180, 270):
-                plan.append((group_name, angle, 6, False))
-                plan.append((group_name, angle, 11, False))
-                plan.append((group_name, angle, 6, True))
+        plan = [
+            ("tight", 90),
+            ("center", 90),
+            ("tight", 0),
+            ("center", 0),
+            ("full", 90),
+            ("full", 0),
+        ]
 
     variants = []
-    for group_name, angle, psm, digits_only in plan:
+    for group_name, angle in plan:
         rotated = groups[group_name].rotate(angle, expand=True)
-        variants.append((save_temp_image(preprocess_image(rotated)), psm, digits_only))
+        variants.append(save_temp_image(preprocess_image(rotated)))
     return variants
-
-
-def run_tesseract(image_path: Path, psm: int, digits_only: bool = False) -> str:
-    command = [
-        "tesseract",
-        str(image_path),
-        "stdout",
-        "--psm",
-        str(psm),
-        "-l",
-        "eng",
-    ]
-    if digits_only:
-        command.extend(["-c", "tessedit_char_whitelist=0123456789UserID:userid"])
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "tesseract failed")
-    return result.stdout
 
 
 def normalize_text(text: str) -> str:
@@ -229,35 +259,61 @@ def choose_best_candidate(text_variants: list[str]) -> tuple[str | None, list[di
 
 
 def extract_from_image(image_path: Path, dump_text: bool = False, mode: str = "fast") -> dict:
-    source_image_path, should_cleanup_source = prepare_source_image(image_path)
-    variants = build_variants(source_image_path, mode=mode)
+    variants = []
     texts = []
     direct_hit = None
+    error_message = ""
     try:
-        first_text = normalize_text(run_tesseract(source_image_path, psm=6))
+        first_text = normalize_text(run_vision_ocr(image_path))
         texts.append(first_text)
         direct_hit = find_direct_user_id(first_text)
-        for variant_path, psm, digits_only in variants:
-            if direct_hit:
-                break
-            text = normalize_text(run_tesseract(variant_path, psm=psm, digits_only=digits_only))
-            texts.append(text)
-            direct_hit = find_direct_user_id(text)
-    finally:
-        if should_cleanup_source:
-            source_image_path.unlink(missing_ok=True)
-        for variant_path, _, _ in variants:
-            variant_path.unlink(missing_ok=True)
+        if not direct_hit:
+            source_image_path, should_cleanup_source = prepare_source_image(image_path)
+            try:
+                variants = build_variants(source_image_path, mode=mode)
+                for variant_path in variants:
+                    if direct_hit:
+                        break
+                    text = normalize_text(run_vision_ocr(variant_path))
+                    texts.append(text)
+                    direct_hit = find_direct_user_id(text)
+            finally:
+                if should_cleanup_source:
+                    source_image_path.unlink(missing_ok=True)
+                for variant_path in variants:
+                    variant_path.unlink(missing_ok=True)
+        if not direct_hit and mode == "accurate":
+            source_image_path, should_cleanup_source = prepare_source_image(image_path)
+            try:
+                tesseract_text = normalize_text(
+                    subprocess.run(
+                        ["tesseract", str(source_image_path), "stdout", "--psm", "6", "-l", "eng"],
+                        capture_output=True,
+                        text=True,
+                    ).stdout
+                )
+                if tesseract_text.strip():
+                    texts.append(tesseract_text)
+                    direct_hit = find_direct_user_id(tesseract_text)
+            finally:
+                if should_cleanup_source:
+                    source_image_path.unlink(missing_ok=True)
+    except Exception as exc:
+        error_message = str(exc)
 
     best_candidate, ranked = choose_best_candidate(texts)
     if direct_hit:
         best_candidate = direct_hit
+    failed_reason = ""
+    if not best_candidate:
+        failed_reason = error_message or "no_user_id_found"
     payload = {
         "file_name": image_path.name,
         "best_candidate": best_candidate,
         "status": "success" if best_candidate else "failed",
         "success_photo_name": image_path.name if best_candidate else "",
         "failed_photo_name": "" if best_candidate else image_path.name,
+        "failed_reason": failed_reason,
         "candidates": ranked[:10],
     }
     if dump_text:
@@ -282,6 +338,7 @@ def write_csv(rows: list[dict], csv_path: Path) -> None:
         "success_photo_name",
         "failed_photo_name",
         "status",
+        "failed_reason",
         "top_candidates",
     ]
     with csv_path.open("w", newline="", encoding="utf-8-sig") as handle:
@@ -295,11 +352,24 @@ def write_csv(rows: list[dict], csv_path: Path) -> None:
                     "success_photo_name": row["success_photo_name"],
                     "failed_photo_name": row["failed_photo_name"],
                     "status": row["status"],
+                    "failed_reason": row.get("failed_reason", ""),
                     "top_candidates": ",".join(
                         candidate["value"] for candidate in row["candidates"][:3]
                     ),
                 }
             )
+
+
+def load_failed_images_from_csv(input_dir: Path, csv_path: Path) -> list[Path]:
+    failed_paths = []
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            if row.get("status") == "failed":
+                file_name = row.get("failed_photo_name") or row.get("file_name")
+                if file_name:
+                    failed_paths.append(input_dir / file_name)
+    return [path for path in failed_paths if path.exists()]
 
 
 def format_duration(seconds: float) -> str:
@@ -429,6 +499,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="After a fast pass, retry failed images once with accurate mode",
     )
+    parser.add_argument(
+        "--only-failed-from-csv",
+        type=Path,
+        help="Rerun only failed images listed in an existing CSV report",
+    )
     return parser
 
 
@@ -439,7 +514,10 @@ def main() -> int:
         print(f"Input not found: {args.input_path}", file=sys.stderr)
         return 1
 
-    image_files = iter_image_files(args.input_path)
+    if args.only_failed_from_csv:
+        image_files = load_failed_images_from_csv(args.input_path, args.only_failed_from_csv)
+    else:
+        image_files = iter_image_files(args.input_path)
     if not image_files:
         print(f"No supported image files found in: {args.input_path}", file=sys.stderr)
         return 1
@@ -479,7 +557,10 @@ def main() -> int:
                     label="pass-2:accurate",
                 )
                 retry_map = {row["file_name"]: row for row in retry_rows}
-                rows = [retry_map.get(row["file_name"], row) if row["status"] == "failed" else row for row in rows]
+                rows = [
+                    retry_map.get(row["file_name"], row) if row["status"] == "failed" else row
+                    for row in rows
+                ]
 
     if args.input_path.is_file() and args.json:
         print(json.dumps(rows[0], ensure_ascii=False, indent=2))
