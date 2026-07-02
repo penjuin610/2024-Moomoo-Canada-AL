@@ -17,15 +17,16 @@ from PIL import Image, ImageFilter, ImageOps
 
 
 KEYWORD_PATTERN = re.compile(r"user\s*id|moomoo\s*id|\bid\b", re.IGNORECASE)
+VALID_ID_PATTERN = re.compile(r"\b(7\d{7})\b")
 DIRECT_PATTERNS = [
-    re.compile(r"user\s*id\D{0,8}(\d{8})", re.IGNORECASE),
-    re.compile(r"(\d{8})\s*\n?\s*user\s*id", re.IGNORECASE),
+    re.compile(r"user\s*id\D{0,8}(7\d{7})", re.IGNORECASE),
+    re.compile(r"(7\d{7})\s*\n?\s*user\s*id", re.IGNORECASE),
 ]
 ID_PATTERNS = [
-    re.compile(r"user\s*id\D{0,8}(\d{8})", re.IGNORECASE),
-    re.compile(r"moomoo\s*id\D{0,8}(\d{8})", re.IGNORECASE),
-    re.compile(r"\bid\D{0,6}(\d{8})\b", re.IGNORECASE),
-    re.compile(r"\b(\d{8})\b"),
+    re.compile(r"user\s*id\D{0,8}(7\d{7})", re.IGNORECASE),
+    re.compile(r"moomoo\s*id\D{0,8}(7\d{7})", re.IGNORECASE),
+    re.compile(r"\bid\D{0,6}(7\d{7})\b", re.IGNORECASE),
+    VALID_ID_PATTERN,
 ]
 IMAGE_SUFFIXES = {
     ".jpg",
@@ -149,7 +150,7 @@ def build_image_groups(image_path: Path) -> dict[str, Image.Image]:
     return {"full": source, "center": center_crop, "tight": tight_crop}
 
 
-def build_variants(image_path: Path, mode: str) -> list[Path]:
+def build_variants(image_path: Path, mode: str) -> list[tuple[Path, int, bool]]:
     groups = build_image_groups(image_path)
 
     if mode == "fast":
@@ -192,6 +193,35 @@ def find_direct_user_id(text: str) -> str | None:
     return None
 
 
+def extract_all_user_ids(text_variants: list[str]) -> list[str]:
+    ordered_ids = []
+    seen = set()
+
+    for text in text_variants:
+        direct_hit = find_direct_user_id(text)
+        if direct_hit and direct_hit not in seen:
+            ordered_ids.append(direct_hit)
+            seen.add(direct_hit)
+
+        for match in VALID_ID_PATTERN.finditer(text):
+            value = match.group(1)
+            if value not in seen:
+                ordered_ids.append(value)
+                seen.add(value)
+
+    ranked_candidates = []
+    for text in text_variants:
+        ranked_candidates.extend(extract_candidates(text))
+
+    for candidate in sorted(ranked_candidates, key=lambda item: item["score"], reverse=True):
+        value = candidate["value"]
+        if value not in seen:
+            ordered_ids.append(value)
+            seen.add(value)
+
+    return ordered_ids
+
+
 def score_candidate(candidate: str, context: str) -> int:
     score = 0
     if re.search(r"user\s*id", context, re.IGNORECASE):
@@ -200,7 +230,7 @@ def score_candidate(candidate: str, context: str) -> int:
         score += 5
     if re.search(r"\bid\b", context, re.IGNORECASE):
         score += 3
-    if re.fullmatch(r"\d{8}", candidate):
+    if re.fullmatch(r"7\d{7}", candidate):
         score += 6
     if len(candidate) == 8:
         score += 4
@@ -301,15 +331,23 @@ def extract_from_image(image_path: Path, dump_text: bool = False, mode: str = "f
     except Exception as exc:
         error_message = str(exc)
 
+    all_user_ids = extract_all_user_ids(texts)
     best_candidate, ranked = choose_best_candidate(texts)
     if direct_hit:
         best_candidate = direct_hit
+    elif all_user_ids:
+        best_candidate = all_user_ids[0]
+
+    if best_candidate and best_candidate not in all_user_ids:
+        all_user_ids = [best_candidate, *all_user_ids]
+
     failed_reason = ""
     if not best_candidate:
         failed_reason = error_message or "no_user_id_found"
     payload = {
         "file_name": image_path.name,
         "best_candidate": best_candidate,
+        "all_user_ids": all_user_ids,
         "status": "success" if best_candidate else "failed",
         "success_photo_name": image_path.name if best_candidate else "",
         "failed_photo_name": "" if best_candidate else image_path.name,
@@ -335,6 +373,7 @@ def write_csv(rows: list[dict], csv_path: Path) -> None:
     fieldnames = [
         "file_name",
         "user_id",
+        "all_user_ids",
         "success_photo_name",
         "failed_photo_name",
         "status",
@@ -349,6 +388,7 @@ def write_csv(rows: list[dict], csv_path: Path) -> None:
                 {
                     "file_name": row["file_name"],
                     "user_id": row["best_candidate"] or "",
+                    "all_user_ids": ",".join(row.get("all_user_ids", [])),
                     "success_photo_name": row["success_photo_name"],
                     "failed_photo_name": row["failed_photo_name"],
                     "status": row["status"],
