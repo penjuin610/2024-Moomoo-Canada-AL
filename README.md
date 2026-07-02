@@ -11,8 +11,12 @@
 This repository packages a local OCR workflow for extracting 8-digit `User ID`
 values from moomoo account screenshots and mobile photos.
 
-It is designed for high-volume local processing on macOS, especially when source
-images come from iPhone photo exports such as `.HEIC` files.
+It is designed for high-volume local processing on macOS and supports workflows
+that start from hundreds of screenshots and scale toward thousands or tens of
+thousands of images through folder-based batch processing.
+
+It is especially practical when source images come from iPhone photo exports
+such as `.HEIC` files.
 
 ### Project Context
 
@@ -28,6 +32,7 @@ moomoo Canada workflows from 2024 to 2026. It demonstrates practical work in:
 ### Features
 
 - Extracts 8-digit `User ID` values from single images or full folders
+- Supports large folder-based review workflows for hundreds to tens of thousands of images
 - Supports `.jpg`, `.png`, `.tiff`, `.webp`, `.heic`, and `.heif`
 - Automatically converts `HEIC/HEIF` to temporary PNG on macOS using `sips`
 - Runs multiple crop and rotation passes for better OCR recall
@@ -89,6 +94,7 @@ The generated CSV contains:
 - This repository is intended as a portfolio demonstration of real-world Python automation work.
 - It is a local utility project and is not an official moomoo repository.
 - No private production data, credentials, or internal business logic are included here.
+- For very large image sets, actual throughput depends on local machine performance, storage speed, and OCR workload quality.
 
 ---
 
@@ -99,7 +105,10 @@ The generated CSV contains:
 这个仓库整理了一个本地 OCR 工具链，用来从 moomoo 账户截图和手机拍照中提取
 8 位 `User ID`。
 
-它适合在 macOS 本地批量处理图片，尤其适合 iPhone 导出的 `.HEIC` 照片。
+它适合在 macOS 本地批量处理图片，既可以处理几百张，也适合扩展到几千张、上万张
+的文件夹批处理场景。
+
+尤其适合 iPhone 导出的 `.HEIC` 照片。
 
 ### 项目背景
 
@@ -115,6 +124,7 @@ The generated CSV contains:
 ### 功能特性
 
 - 支持单张图片或整个文件夹批量提取 8 位 `User ID`
+- 支持面向几百、几千、上万张图片的文件夹批处理工作流
 - 支持 `.jpg`、`.png`、`.tiff`、`.webp`、`.heic`、`.heif`
 - 在 macOS 下自动用 `sips` 将 `HEIC/HEIF` 转成临时 PNG
 - 自动执行多角度旋转和多区域裁剪，提高 OCR 命中率
@@ -176,3 +186,4 @@ python3 extract_moomoo_id.py /path/to/photo_folder --csv-output moomoo_user_ids.
 - 这个仓库用于展示我在真实业务场景中的 Python 自动化能力。
 - 这是一个本地工具型作品集项目，不是 moomoo 官方仓库。
 - 仓库中不包含任何私有生产数据、账号凭证或内部业务逻辑。
+- 如果图片量非常大，实际处理速度会取决于本机性能、磁盘速度以及图片质量。
