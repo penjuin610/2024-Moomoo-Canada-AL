@@ -35,7 +35,10 @@ moomoo Canada workflows from 2024 to 2026. It demonstrates practical work in:
 - Supports large folder-based review workflows for hundreds to tens of thousands of images
 - Supports `.jpg`, `.png`, `.tiff`, `.webp`, `.heic`, and `.heif`
 - Automatically converts `HEIC/HEIF` to temporary PNG on macOS using `sips`
-- Runs multiple crop and rotation passes for better OCR recall
+- Supports `fast` and `accurate` OCR modes
+- Can retry only failed images with a second accurate pass
+- Prints live progress updates with percentage, elapsed time, and ETA
+- Runs parallel folder processing with configurable worker count
 - Exports CSV with success and failure file tracking
 - Includes both a Python script and a Jupyter notebook workflow
 
@@ -68,8 +71,14 @@ python3 extract_moomoo_id.py /path/to/photo.jpg --json
 Batch folder:
 
 ```bash
-python3 extract_moomoo_id.py /path/to/photo_folder --csv-output moomoo_user_ids.csv
+python3 extract_moomoo_id.py /path/to/photo_folder --csv-output moomoo_user_ids.csv --mode fast --workers 6 --retry-failed-with-accurate
 ```
+
+Recommended for large batches:
+
+- Start with `--mode fast`
+- Use `--workers 4`, `6`, or `8` depending on machine performance
+- Add `--retry-failed-with-accurate` to improve recall only for failed images
 
 ### Notebook Usage
 
@@ -127,7 +136,10 @@ The generated CSV contains:
 - 支持面向几百、几千、上万张图片的文件夹批处理工作流
 - 支持 `.jpg`、`.png`、`.tiff`、`.webp`、`.heic`、`.heif`
 - 在 macOS 下自动用 `sips` 将 `HEIC/HEIF` 转成临时 PNG
-- 自动执行多角度旋转和多区域裁剪，提高 OCR 命中率
+- 支持 `fast` 和 `accurate` 两种 OCR 模式
+- 支持只对失败图片做第二轮 `accurate` 重试
+- 运行时实时输出百分比、耗时和预计剩余时间 ETA
+- 支持可配置并行 worker 数量
 - 输出带成功/失败文件名记录的 CSV
 - 同时提供 Python 脚本版本和 Jupyter Notebook 版本
 
@@ -160,8 +172,14 @@ python3 extract_moomoo_id.py /path/to/photo.jpg --json
 批量提取：
 
 ```bash
-python3 extract_moomoo_id.py /path/to/photo_folder --csv-output moomoo_user_ids.csv
+python3 extract_moomoo_id.py /path/to/photo_folder --csv-output moomoo_user_ids.csv --mode fast --workers 6 --retry-failed-with-accurate
 ```
+
+大批量图片推荐参数：
+
+- 优先从 `--mode fast` 开始
+- 根据机器性能使用 `--workers 4`、`6` 或 `8`
+- 如果想兼顾速度和命中率，可以加 `--retry-failed-with-accurate`
 
 ### Notebook 使用方式
 

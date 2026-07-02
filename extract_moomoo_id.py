@@ -3,10 +3,13 @@
 import argparse
 import csv
 import json
+import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from PIL import Image, ImageFilter, ImageOps
@@ -75,7 +78,7 @@ def prepare_source_image(image_path: Path) -> tuple[Path, bool]:
     return image_path, False
 
 
-def build_variants(image_path: Path) -> list[Path]:
+def build_image_groups(image_path: Path) -> dict[str, Image.Image]:
     source = ImageOps.exif_transpose(Image.open(image_path))
     width, height = source.size
     center_crop = source.crop(
@@ -94,12 +97,32 @@ def build_variants(image_path: Path) -> list[Path]:
             int(height * 0.58),
         )
     )
+    return {"full": source, "center": center_crop, "tight": tight_crop}
+
+
+def build_variants(image_path: Path, mode: str) -> list[tuple[Path, int, bool]]:
+    groups = build_image_groups(image_path)
+
+    if mode == "fast":
+        plan = [
+            ("tight", 90, 6, True),
+            ("tight", 0, 6, True),
+            ("center", 90, 6, True),
+            ("full", 90, 6, False),
+            ("tight", 90, 11, True),
+        ]
+    else:
+        plan = []
+        for group_name in ("full", "center", "tight"):
+            for angle in (0, 90, 180, 270):
+                plan.append((group_name, angle, 6, False))
+                plan.append((group_name, angle, 11, False))
+                plan.append((group_name, angle, 6, True))
 
     variants = []
-    for base_image in (source, center_crop, tight_crop):
-        for angle in (0, 90, 180, 270):
-            rotated = base_image.rotate(angle, expand=True)
-            variants.append(save_temp_image(preprocess_image(rotated)))
+    for group_name, angle, psm, digits_only in plan:
+        rotated = groups[group_name].rotate(angle, expand=True)
+        variants.append((save_temp_image(preprocess_image(rotated)), psm, digits_only))
     return variants
 
 
@@ -129,6 +152,14 @@ def normalize_text(text: str) -> str:
     text = text.replace("Userid", "User ID")
     text = text.replace("user \\D", "user ID")
     return text
+
+
+def find_direct_user_id(text: str) -> str | None:
+    for pattern in DIRECT_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return match.group(1)
+    return None
 
 
 def score_candidate(candidate: str, context: str) -> int:
@@ -178,10 +209,9 @@ def extract_candidates(text: str) -> list[dict]:
 
 def choose_best_candidate(text_variants: list[str]) -> tuple[str | None, list[dict]]:
     for text in text_variants:
-        for pattern in DIRECT_PATTERNS:
-            match = pattern.search(text)
-            if match:
-                return match.group(1), extract_candidates(text)
+        direct_hit = find_direct_user_id(text)
+        if direct_hit:
+            return direct_hit, extract_candidates(text)
 
     all_candidates = []
     for text in text_variants:
@@ -198,23 +228,30 @@ def choose_best_candidate(text_variants: list[str]) -> tuple[str | None, list[di
     return best, ranked
 
 
-def extract_from_image(image_path: Path, dump_text: bool = False) -> dict:
+def extract_from_image(image_path: Path, dump_text: bool = False, mode: str = "fast") -> dict:
     source_image_path, should_cleanup_source = prepare_source_image(image_path)
-    variants = build_variants(source_image_path)
+    variants = build_variants(source_image_path, mode=mode)
     texts = []
+    direct_hit = None
     try:
-        texts.append(normalize_text(run_tesseract(source_image_path, psm=6)))
-        for variant_path in variants:
-            texts.append(normalize_text(run_tesseract(variant_path, psm=6)))
-            texts.append(normalize_text(run_tesseract(variant_path, psm=11)))
-            texts.append(normalize_text(run_tesseract(variant_path, psm=6, digits_only=True)))
+        first_text = normalize_text(run_tesseract(source_image_path, psm=6))
+        texts.append(first_text)
+        direct_hit = find_direct_user_id(first_text)
+        for variant_path, psm, digits_only in variants:
+            if direct_hit:
+                break
+            text = normalize_text(run_tesseract(variant_path, psm=psm, digits_only=digits_only))
+            texts.append(text)
+            direct_hit = find_direct_user_id(text)
     finally:
         if should_cleanup_source:
             source_image_path.unlink(missing_ok=True)
-        for variant_path in variants:
+        for variant_path, _, _ in variants:
             variant_path.unlink(missing_ok=True)
 
     best_candidate, ranked = choose_best_candidate(texts)
+    if direct_hit:
+        best_candidate = direct_hit
     payload = {
         "file_name": image_path.name,
         "best_candidate": best_candidate,
@@ -265,6 +302,95 @@ def write_csv(rows: list[dict], csv_path: Path) -> None:
             )
 
 
+def format_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {secs:02d}s"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
+def print_progress(
+    *,
+    label: str,
+    completed: int,
+    total: int,
+    success_count: int,
+    failed_count: int,
+    started_at: float,
+) -> None:
+    elapsed = max(time.time() - started_at, 0.001)
+    rate = completed / elapsed
+    remaining = total - completed
+    eta_seconds = remaining / rate if rate > 0 else 0
+    percent = (completed / total) * 100 if total else 100
+    print(
+        f"[{label}] {completed}/{total} ({percent:5.1f}%) | "
+        f"success={success_count} failed={failed_count} | "
+        f"elapsed={format_duration(elapsed)} eta={format_duration(eta_seconds)}",
+        flush=True,
+    )
+
+
+def run_batch(
+    image_files: list[Path],
+    *,
+    mode: str,
+    workers: int,
+    dump_text: bool,
+    label: str,
+) -> list[dict]:
+    rows = []
+    success_count = 0
+    failed_count = 0
+    started_at = time.time()
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+        future_map = {
+            executor.submit(
+                extract_from_image,
+                image_path,
+                dump_text,
+                mode,
+            ): image_path
+            for image_path in image_files
+        }
+
+        for completed, future in enumerate(as_completed(future_map), start=1):
+            image_path = future_map[future]
+            try:
+                row = future.result()
+            except Exception as exc:
+                row = {
+                    "file_name": image_path.name,
+                    "best_candidate": None,
+                    "status": "failed",
+                    "success_photo_name": "",
+                    "failed_photo_name": image_path.name,
+                    "candidates": [],
+                    "error": str(exc),
+                }
+            rows.append(row)
+            if row["status"] == "success":
+                success_count += 1
+            else:
+                failed_count += 1
+            print_progress(
+                label=label,
+                completed=completed,
+                total=len(image_files),
+                success_count=success_count,
+                failed_count=failed_count,
+                started_at=started_at,
+            )
+
+    rows.sort(key=lambda row: row["file_name"])
+    return rows
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Extract moomoo User ID values from one image or a whole folder."
@@ -286,6 +412,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("moomoo_user_ids.csv"),
         help="CSV output path for folder mode or when you want a saved report",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["fast", "accurate"],
+        default="fast",
+        help="fast is much quicker for large batches; accurate tries many more OCR passes",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=max(1, min(8, (os.cpu_count() or 4) - 1)),
+        help="Parallel workers for folder mode",
+    )
+    parser.add_argument(
+        "--retry-failed-with-accurate",
+        action="store_true",
+        help="After a fast pass, retry failed images once with accurate mode",
+    )
     return parser
 
 
@@ -301,7 +444,42 @@ def main() -> int:
         print(f"No supported image files found in: {args.input_path}", file=sys.stderr)
         return 1
 
-    rows = [extract_from_image(image_path, dump_text=args.dump_text) for image_path in image_files]
+    if args.input_path.is_file():
+        rows = [extract_from_image(image_files[0], dump_text=args.dump_text, mode=args.mode)]
+    else:
+        print(
+            f"Starting batch OCR for {len(image_files)} images | "
+            f"mode={args.mode} workers={args.workers}",
+            flush=True,
+        )
+        rows = run_batch(
+            image_files,
+            mode=args.mode,
+            workers=args.workers,
+            dump_text=args.dump_text,
+            label=f"pass-1:{args.mode}",
+        )
+
+        if args.retry_failed_with_accurate and args.mode == "fast":
+            failed_files = [
+                args.input_path / row["failed_photo_name"]
+                for row in rows
+                if row["status"] == "failed" and row["failed_photo_name"]
+            ]
+            if failed_files:
+                print(
+                    f"Retrying failed images with accurate mode: {len(failed_files)}",
+                    flush=True,
+                )
+                retry_rows = run_batch(
+                    failed_files,
+                    mode="accurate",
+                    workers=args.workers,
+                    dump_text=args.dump_text,
+                    label="pass-2:accurate",
+                )
+                retry_map = {row["file_name"]: row for row in retry_rows}
+                rows = [retry_map.get(row["file_name"], row) if row["status"] == "failed" else row for row in rows]
 
     if args.input_path.is_file() and args.json:
         print(json.dumps(rows[0], ensure_ascii=False, indent=2))
