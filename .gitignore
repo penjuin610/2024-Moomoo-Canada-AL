@@ -7,3 +7,5 @@ __pycache__/
 
 moomoo_batch_test/
 moomoo_test_image.png
+vision_ocr_helper
+test_progress.csv
