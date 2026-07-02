@@ -34,6 +34,7 @@ moomoo Canada workflows from 2024 to 2026. It demonstrates practical work in:
 - Extracts 8-digit `User ID` values from single images or full folders
 - Supports large folder-based review workflows for hundreds to tens of thousands of images
 - Supports `.jpg`, `.png`, `.tiff`, `.webp`, `.heic`, and `.heif`
+- Uses macOS native Vision OCR as the primary recognition backend
 - Automatically converts `HEIC/HEIF` to temporary PNG on macOS using `sips`
 - Supports `fast` and `accurate` OCR modes
 - Can retry only failed images with a second accurate pass
@@ -51,7 +52,8 @@ moomoo Canada workflows from 2024 to 2026. It demonstrates practical work in:
 ### Requirements
 
 - Python 3.10+
-- `tesseract` available in `PATH`
+- macOS with Vision framework support
+- `clang` available in `PATH` for the local Vision helper build
 - macOS `sips` for `.heic` / `.heif` conversion
 
 Install Python dependency:
@@ -96,7 +98,26 @@ The generated CSV contains:
 - `success_photo_name`
 - `failed_photo_name`
 - `status`
+- `failed_reason`
 - `top_candidates`
+
+### Recommended Failed-Image Workflow
+
+For large real-world batches, the most practical workflow is:
+
+1. run a full folder pass with `--mode fast`
+2. review the CSV and inspect rows where `status=failed`
+3. rerun only failed images with:
+
+```bash
+python3 extract_moomoo_id.py /path/to/photo_folder \
+  --csv-output moomoo_user_ids_failed_rerun.csv \
+  --mode accurate \
+  --workers 3 \
+  --only-failed-from-csv moomoo_user_ids.csv
+```
+
+This keeps the first pass fast while spending more OCR time only on difficult images.
 
 ### Professional Notes
 
@@ -135,6 +156,7 @@ The generated CSV contains:
 - 支持单张图片或整个文件夹批量提取 8 位 `User ID`
 - 支持面向几百、几千、上万张图片的文件夹批处理工作流
 - 支持 `.jpg`、`.png`、`.tiff`、`.webp`、`.heic`、`.heif`
+- 主识别后端改为 macOS 原生 Vision OCR
 - 在 macOS 下自动用 `sips` 将 `HEIC/HEIF` 转成临时 PNG
 - 支持 `fast` 和 `accurate` 两种 OCR 模式
 - 支持只对失败图片做第二轮 `accurate` 重试
@@ -152,7 +174,8 @@ The generated CSV contains:
 ### 运行要求
 
 - Python 3.10+
-- 已安装并可在 `PATH` 中使用的 `tesseract`
+- 支持 Vision.framework 的 macOS 环境
+- 可在 `PATH` 中使用的 `clang`
 - macOS 自带 `sips`，用于处理 `.heic` / `.heif`
 
 安装 Python 依赖：
@@ -197,11 +220,30 @@ python3 extract_moomoo_id.py /path/to/photo_folder --csv-output moomoo_user_ids.
 - `success_photo_name`
 - `failed_photo_name`
 - `status`
+- `failed_reason`
 - `top_candidates`
+
+### failed 图片推荐处理流程
+
+比较实用的真实工作流是：
+
+1. 先用 `--mode fast` 全量跑一轮
+2. 查看 CSV 中 `status=failed` 的记录
+3. 只对 failed 图片再跑一次：
+
+```bash
+python3 extract_moomoo_id.py /path/to/photo_folder \
+  --csv-output moomoo_user_ids_failed_rerun.csv \
+  --mode accurate \
+  --workers 3 \
+  --only-failed-from-csv moomoo_user_ids.csv
+```
+
+这样第一轮保持速度，第二轮只把 OCR 计算量花在难图上。
 
 ### 专业说明
 
 - 这个仓库用于展示我在真实业务场景中的 Python 自动化能力。
 - 这是一个本地工具型作品集项目，不是 moomoo 官方仓库。
 - 仓库中不包含任何私有生产数据、账号凭证或内部业务逻辑。
-- 如果图片量非常大，实际处理速度会取决于本机性能、磁盘速度以及图片质量。
+- 如果图片量非常大，实际处理速度会取决于本机性能、磁盘速度以及图片质量.
