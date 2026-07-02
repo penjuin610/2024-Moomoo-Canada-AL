@@ -10,7 +10,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -499,25 +498,6 @@ def print_progress(
     )
 
 
-def print_waiting_progress(
-    *,
-    label: str,
-    completed: int,
-    total: int,
-    success_count: int,
-    failed_count: int,
-    started_at: float,
-) -> None:
-    elapsed = max(time.time() - started_at, 0.001)
-    percent = (completed / total) * 100 if total else 100
-    print(
-        f"[{label}] waiting... {completed}/{total} ({percent:5.1f}%) | "
-        f"success={success_count} failed={failed_count} | "
-        f"elapsed={format_duration(elapsed)}",
-        flush=True,
-    )
-
-
 def run_batch(
     image_files: list[Path],
     *,
@@ -527,71 +507,48 @@ def run_batch(
     label: str,
 ) -> list[dict]:
     rows = []
+    success_count = 0
+    failed_count = 0
     started_at = time.time()
-    progress = {
-        "completed": 0,
-        "success_count": 0,
-        "failed_count": 0,
-    }
-    stop_event = threading.Event()
 
-    def heartbeat() -> None:
-        while not stop_event.wait(5):
-            print_waiting_progress(
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+        future_map = {
+            executor.submit(
+                extract_from_image,
+                image_path,
+                dump_text,
+                mode,
+            ): image_path
+            for image_path in image_files
+        }
+
+        for completed, future in enumerate(as_completed(future_map), start=1):
+            image_path = future_map[future]
+            try:
+                row = future.result()
+            except Exception as exc:
+                row = {
+                    "file_name": image_path.name,
+                    "best_candidate": None,
+                    "status": "failed",
+                    "success_photo_name": "",
+                    "failed_photo_name": image_path.name,
+                    "candidates": [],
+                    "error": str(exc),
+                }
+            rows.append(row)
+            if row["status"] == "success":
+                success_count += 1
+            else:
+                failed_count += 1
+            print_progress(
                 label=label,
-                completed=progress["completed"],
+                completed=completed,
                 total=len(image_files),
-                success_count=progress["success_count"],
-                failed_count=progress["failed_count"],
+                success_count=success_count,
+                failed_count=failed_count,
                 started_at=started_at,
             )
-
-    heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
-    heartbeat_thread.start()
-
-    try:
-        with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
-            future_map = {
-                executor.submit(
-                    extract_from_image,
-                    image_path,
-                    dump_text,
-                    mode,
-                ): image_path
-                for image_path in image_files
-            }
-
-            for completed, future in enumerate(as_completed(future_map), start=1):
-                image_path = future_map[future]
-                try:
-                    row = future.result()
-                except Exception as exc:
-                    row = {
-                        "file_name": image_path.name,
-                        "best_candidate": None,
-                        "status": "failed",
-                        "success_photo_name": "",
-                        "failed_photo_name": image_path.name,
-                        "candidates": [],
-                        "error": str(exc),
-                    }
-                rows.append(row)
-                progress["completed"] = completed
-                if row["status"] == "success":
-                    progress["success_count"] += 1
-                else:
-                    progress["failed_count"] += 1
-                print_progress(
-                    label=label,
-                    completed=completed,
-                    total=len(image_files),
-                    success_count=progress["success_count"],
-                    failed_count=progress["failed_count"],
-                    started_at=started_at,
-                )
-    finally:
-        stop_event.set()
-        heartbeat_thread.join(timeout=1)
 
     rows.sort(key=lambda row: row["file_name"])
     return rows
