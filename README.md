@@ -40,7 +40,7 @@ moomoo Canada workflows from 2024 to 2026. It demonstrates practical work in:
 - Can retry only failed images with a second accurate pass
 - Prints live progress updates with percentage, elapsed time, and ETA
 - Runs parallel folder processing with configurable worker count
-- Exports both a summary CSV and an expanded one-row-per-ID CSV for multi-ID screenshots
+- Exports a single one-row-per-ID CSV, which is easier for deduping and counting
 - Includes both a Python script and a Jupyter notebook workflow
 
 ### Repository Files
@@ -93,22 +93,14 @@ Open `moomoo_user_id_batch.ipynb` in VS Code or Jupyter and run:
 
 The generated CSV contains:
 
-- `file_name`
-- `user_id` (primary / first detected valid ID)
-- `all_user_ids` (all detected `7xxxxxxx` IDs from the same image, comma-separated)
+- `photo_title` (the original image filename; repeated when one photo has multiple IDs)
+- `user_id` (one row per ID)
+- `id_order_in_photo` (which number this ID is within the same photo)
+- `total_ids_in_photo` (how many IDs were found in that photo)
 - `success_photo_name`
 - `failed_photo_name`
 - `status`
 - `failed_reason`
-- `top_candidates`
-
-It also automatically creates an expanded CSV named like
-`moomoo_user_ids_expanded.csv`, where:
-
-- each detected ID gets its own row
-- `photo_group` keeps the original photo grouping
-- `id_index_in_photo` shows the order within the same photo
-- `ids_in_same_photo` shows how many IDs were extracted from that photo
 
 ### Recommended Failed-Image Workflow
 
@@ -171,7 +163,7 @@ This keeps the first pass fast while spending more OCR time only on difficult im
 - 支持只对失败图片做第二轮 `accurate` 重试
 - 运行时实时输出百分比、耗时和预计剩余时间 ETA
 - 支持可配置并行 worker 数量
-- 同时输出汇总 CSV 和展开版 CSV，方便多 ID 截图后续统计与去重
+- 只输出一份单行单 ID 的 CSV，方便后续统计、筛重和查重
 - 同时提供 Python 脚本版本和 Jupyter Notebook 版本
 
 ### 仓库文件说明
@@ -224,21 +216,14 @@ python3 extract_moomoo_id.py /path/to/photo_folder --csv-output moomoo_user_ids.
 
 生成的 CSV 包含：
 
-- `file_name`
-- `user_id`（主 ID / 首个识别出的有效 ID）
-- `all_user_ids`（同一张图中识别出的所有 `7xxxxxxx`，逗号分隔）
+- `photo_title`（原始图片名；如果一张图里有多个 ID，会重复写同一个图片名）
+- `user_id`（每一行只放一个 ID）
+- `id_order_in_photo`（这个 ID 是该图片里的第几个）
+- `total_ids_in_photo`（这张图片一共识别出了几个 ID）
 - `success_photo_name`
 - `failed_photo_name`
 - `status`
 - `failed_reason`
-- `top_candidates`
-
-同时还会自动生成一份类似 `moomoo_user_ids_expanded.csv` 的展开版 CSV：
-
-- 每个识别出的 ID 单独占一行
-- `photo_group` 用来保留原始照片归属
-- `id_index_in_photo` 表示该 ID 在同一张图里的顺序
-- `ids_in_same_photo` 表示该图片总共识别出了几个 ID
 
 ### failed 图片推荐处理流程
 
