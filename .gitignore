@@ -1,0 +1,9 @@
+__pycache__/
+.ipynb_checkpoints/
+*.pyc
+*.pyo
+*.DS_Store
+*.csv
+
+moomoo_batch_test/
+moomoo_test_image.png
