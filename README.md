@@ -8,8 +8,8 @@
 
 ### Overview
 
-This repository packages a local OCR workflow for extracting 8-digit `User ID`
-values from moomoo account screenshots and mobile photos.
+This repository packages a local OCR workflow for extracting moomoo `User ID`
+values from screenshots and mobile photos.
 
 It is designed for high-volume local processing on macOS and supports workflows
 that start from hundreds of screenshots and scale toward thousands or tens of
@@ -31,7 +31,7 @@ moomoo Canada workflows from 2024 to 2026. It demonstrates practical work in:
 
 ### Features
 
-- Extracts 8-digit `User ID` values from single images or full folders
+- Extracts all valid 8-digit IDs that start with `7` from single images or full folders
 - Supports large folder-based review workflows for hundreds to tens of thousands of images
 - Supports `.jpg`, `.png`, `.tiff`, `.webp`, `.heic`, and `.heif`
 - Uses macOS native Vision OCR as the primary recognition backend
@@ -40,7 +40,7 @@ moomoo Canada workflows from 2024 to 2026. It demonstrates practical work in:
 - Can retry only failed images with a second accurate pass
 - Prints live progress updates with percentage, elapsed time, and ETA
 - Runs parallel folder processing with configurable worker count
-- Exports CSV with success and failure file tracking
+- Exports CSV with both a primary `user_id` and an `all_user_ids` column for multi-ID screenshots
 - Includes both a Python script and a Jupyter notebook workflow
 
 ### Repository Files
@@ -94,7 +94,8 @@ Open `moomoo_user_id_batch.ipynb` in VS Code or Jupyter and run:
 The generated CSV contains:
 
 - `file_name`
-- `user_id`
+- `user_id` (primary / first detected valid ID)
+- `all_user_ids` (all detected `7xxxxxxx` IDs from the same image, comma-separated)
 - `success_photo_name`
 - `failed_photo_name`
 - `status`
@@ -133,7 +134,7 @@ This keeps the first pass fast while spending more OCR time only on difficult im
 ### 项目简介
 
 这个仓库整理了一个本地 OCR 工具链，用来从 moomoo 账户截图和手机拍照中提取
-8 位 `User ID`。
+`User ID`。
 
 它适合在 macOS 本地批量处理图片，既可以处理几百张，也适合扩展到几千张、上万张
 的文件夹批处理场景。
@@ -153,7 +154,7 @@ This keeps the first pass fast while spending more OCR time only on difficult im
 
 ### 功能特性
 
-- 支持单张图片或整个文件夹批量提取 8 位 `User ID`
+- 支持单张图片或整个文件夹批量提取所有以 `7` 开头的 8 位 `User ID`
 - 支持面向几百、几千、上万张图片的文件夹批处理工作流
 - 支持 `.jpg`、`.png`、`.tiff`、`.webp`、`.heic`、`.heif`
 - 主识别后端改为 macOS 原生 Vision OCR
@@ -162,7 +163,7 @@ This keeps the first pass fast while spending more OCR time only on difficult im
 - 支持只对失败图片做第二轮 `accurate` 重试
 - 运行时实时输出百分比、耗时和预计剩余时间 ETA
 - 支持可配置并行 worker 数量
-- 输出带成功/失败文件名记录的 CSV
+- 输出带成功/失败文件名记录的 CSV，并额外保留多 ID 截图的完整 ID 列
 - 同时提供 Python 脚本版本和 Jupyter Notebook 版本
 
 ### 仓库文件说明
@@ -216,7 +217,8 @@ python3 extract_moomoo_id.py /path/to/photo_folder --csv-output moomoo_user_ids.
 生成的 CSV 包含：
 
 - `file_name`
-- `user_id`
+- `user_id`（主 ID / 首个识别出的有效 ID）
+- `all_user_ids`（同一张图中识别出的所有 `7xxxxxxx`，逗号分隔）
 - `success_photo_name`
 - `failed_photo_name`
 - `status`
@@ -246,4 +248,4 @@ python3 extract_moomoo_id.py /path/to/photo_folder \
 - 这个仓库用于展示我在真实业务场景中的 Python 自动化能力。
 - 这是一个本地工具型作品集项目，不是 moomoo 官方仓库。
 - 仓库中不包含任何私有生产数据、账号凭证或内部业务逻辑。
-- 如果图片量非常大，实际处理速度会取决于本机性能、磁盘速度以及图片质量.
+- 如果图片量非常大，实际处理速度会取决于本机性能、磁盘速度以及图片质量。
