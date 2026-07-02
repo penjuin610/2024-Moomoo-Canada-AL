@@ -400,6 +400,59 @@ def write_csv(rows: list[dict], csv_path: Path) -> None:
             )
 
 
+def build_expanded_csv_path(csv_path: Path) -> Path:
+    return csv_path.with_name(f"{csv_path.stem}_expanded{csv_path.suffix}")
+
+
+def write_expanded_csv(rows: list[dict], csv_path: Path) -> None:
+    fieldnames = [
+        "file_name",
+        "photo_group",
+        "user_id",
+        "id_index_in_photo",
+        "ids_in_same_photo",
+        "success_photo_name",
+        "failed_photo_name",
+        "status",
+        "failed_reason",
+    ]
+    with csv_path.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            all_user_ids = row.get("all_user_ids", [])
+            if all_user_ids:
+                ids_in_same_photo = len(all_user_ids)
+                for index, user_id in enumerate(all_user_ids, start=1):
+                    writer.writerow(
+                        {
+                            "file_name": row["file_name"],
+                            "photo_group": row["file_name"],
+                            "user_id": user_id,
+                            "id_index_in_photo": index,
+                            "ids_in_same_photo": ids_in_same_photo,
+                            "success_photo_name": row["success_photo_name"],
+                            "failed_photo_name": row["failed_photo_name"],
+                            "status": row["status"],
+                            "failed_reason": row.get("failed_reason", ""),
+                        }
+                    )
+            else:
+                writer.writerow(
+                    {
+                        "file_name": row["file_name"],
+                        "photo_group": row["file_name"],
+                        "user_id": "",
+                        "id_index_in_photo": "",
+                        "ids_in_same_photo": 0,
+                        "success_photo_name": row["success_photo_name"],
+                        "failed_photo_name": row["failed_photo_name"],
+                        "status": row["status"],
+                        "failed_reason": row.get("failed_reason", ""),
+                    }
+                )
+
+
 def load_failed_images_from_csv(input_dir: Path, csv_path: Path) -> list[Path]:
     failed_paths = []
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -615,6 +668,8 @@ def main() -> int:
         return 2
 
     write_csv(rows, args.csv_output)
+    expanded_csv_path = build_expanded_csv_path(args.csv_output)
+    write_expanded_csv(rows, expanded_csv_path)
 
     success_count = sum(1 for row in rows if row["status"] == "success")
     failed_count = len(rows) - success_count
@@ -622,6 +677,7 @@ def main() -> int:
     print(f"Success: {success_count}")
     print(f"Failed: {failed_count}")
     print(f"CSV saved to: {args.csv_output.resolve()}")
+    print(f"Expanded CSV saved to: {expanded_csv_path.resolve()}")
     return 0 if failed_count == 0 else 2
 
 
